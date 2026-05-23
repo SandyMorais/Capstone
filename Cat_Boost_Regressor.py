@@ -1,3 +1,6 @@
+import pickle
+import joblib
+import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -19,6 +22,8 @@ from features import build_dataset
 # =========================================================
 
 df = build_dataset("data/data.csv")
+df = df.dropna(subset=["call_type_group"])
+
 df = df.sort_values("received_dttm")
 
 
@@ -119,7 +124,6 @@ model.fit(
 # =========================================================
 # PREDICT
 # =========================================================
-
 pred = model.predict(X_test)
 
 
@@ -141,9 +145,22 @@ p95 = np.percentile(abs_errors, 95)
 
 
 # =========================================================
+# Save to use in API
+# =========================================================
+# Save the model
+joblib.dump(model, 'model.pickle')
+
+# Save the column names
+with open('columns.json', 'w') as fh:
+    json.dump(X_train.columns.tolist(), fh)
+
+# Save the dtypes
+with open('dtypes.pickle', 'wb') as fh:
+    pickle.dump(X_train.dtypes.to_dict(), fh)  # convert Series to dict for stability
+
+# =========================================================
 # RESULTS
 # =========================================================
-
 print("\n================ CATBOOST RESULTS ================")
 
 print("MAE:", mae)
@@ -156,6 +173,7 @@ print("\nTAIL ERRORS")
 print("P90:", p90)
 print("P95:", p95)
 
+'''
 
 # =========================================================
 # FEATURE IMPORTANCE
@@ -192,3 +210,5 @@ plt.xlabel("Importance")
 
 plt.tight_layout()
 plt.show()
+
+'''
