@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from flask import Flask, request, jsonify
+
 from peewee import (
     Model,
     CharField,
@@ -14,36 +15,102 @@ from peewee import (
     CompositeKey,
     IntegrityError,
 )
+
 from playhouse.db_url import connect
 from playhouse.sqlite_ext import JSONField
 
 # =========================================================
-# DB
+# DATABASE
 # =========================================================
 
 DB = connect(
-    os.environ.get("DATABASE_URL") or "sqlite:///predictions.db"
+    os.environ.get("DATABASE_URL")
+    or "sqlite:///predictions.db"
 )
 
+# =========================================================
+# MODEL
+# =========================================================
+
 class Prediction(Model):
+
+    # -----------------------------------------------------
+    # IDENTIFIERS
+    # -----------------------------------------------------
+
     unit_id = CharField()
+
     received_dttm = CharField()
 
-    predicted_response_time_seconds = FloatField()
-    actual_response_time_seconds = FloatField(null=True)
+    # -----------------------------------------------------
+    # PREDICTIONS
+    # -----------------------------------------------------
 
-    predict_payload = JSONField(null=True)
-    actual_payload = JSONField(null=True)
+    predicted_response_time_seconds = FloatField()
+
+    actual_response_time_seconds = FloatField(
+        null=True
+    )
+
+    # -----------------------------------------------------
+    # STRUCTURED FIELDS
+    # -----------------------------------------------------
+
+    call_type = CharField(null=True)
+
+    call_type_group = CharField(null=True)
+
+    original_priority = CharField(null=True)
+
+    unit_type = CharField(null=True)
+
+    station_area = CharField(null=True)
+
+    battalion = CharField(null=True)
+
+    neighborhood_district = CharField(null=True)
+
+    zipcode_of_incident = CharField(null=True)
+
+    on_scene_dttm = CharField(null=True)
+
+    # -----------------------------------------------------
+    # RAW + NORMALIZED PAYLOADS
+    # -----------------------------------------------------
+
+    raw_predict_payload = JSONField(
+        null=True
+    )
+
+    normalized_predict_payload = JSONField(
+        null=True
+    )
+
+    raw_actual_payload = JSONField(
+        null=True
+    )
+
+    normalized_actual_payload = JSONField(
+        null=True
+    )
 
     class Meta:
+
         database = DB
-        primary_key = CompositeKey("unit_id", "received_dttm")
+
+        primary_key = CompositeKey(
+            "unit_id",
+            "received_dttm"
+        )
 
 
-DB.create_tables([Prediction], safe=True)
+DB.create_tables(
+    [Prediction],
+    safe=True
+)
 
 # =========================================================
-# LOAD MODEL
+# LOAD MODEL + SCHEMA
 # =========================================================
 
 with open("columns.json") as f:
@@ -52,210 +119,465 @@ with open("columns.json") as f:
 with open("dtypes.pickle", "rb") as f:
     DTYPES = pickle.load(f)
 
-model = joblib.load("model.pickle")
+model = joblib.load(
+    "model.pickle"
+)
 
 # =========================================================
-# VALID VALUES
+# CATEGORICAL CONFIG
 # =========================================================
 
-UNIT_TYPE_MAP = {
-    "MEDIC": "MEDIC",
-    "EMS": "MEDIC",
-    "AMBULANCE": "MEDIC",
-    "AMB": "MEDIC",
-    "PARAMEDIC": "MEDIC",
+CATEGORICAL_CONFIG = {
 
-    "ENGINE": "ENGINE",
-    "ENG": "ENGINE",
-    "ENGINE COMPANY": "ENGINE",
+    "unit_type": {
 
-    "TRUCK": "TRUCK",
-    "TRUCK COMPANY": "TRUCK",
+        "type": "map",
 
-    "CHIEF": "CHIEF",
-    "PRIVATE": "PRIVATE",
-    "SUPPORT": "SUPPORT",
-    "RESCUE CAPTAIN": "RESCUE CAPTAIN",
-    "RESCUE SQUAD": "RESCUE SQUAD",
-    "INVESTIGATION": "INVESTIGATION",
-    "CP": "CP",
-    "BLS": "BLS"
+        "allow_token_fallback": True,
+
+        "map": {
+
+            # EMS
+            "MEDIC": "MEDIC",
+            "EMS": "MEDIC",
+            "AMBULANCE": "MEDIC",
+            "AMB": "MEDIC",
+            "PARAMEDIC": "MEDIC",
+
+            # ENGINE
+            "ENGINE": "ENGINE",
+            "ENG": "ENGINE",
+            "ENGINE COMPANY": "ENGINE",
+
+            # TRUCK
+            "TRUCK": "TRUCK",
+            "TRUCK COMPANY": "TRUCK",
+
+            # OTHER
+            "CHIEF": "CHIEF",
+            "PRIVATE": "PRIVATE",
+            "SUPPORT": "SUPPORT",
+            "RESCUE CAPTAIN": "RESCUE CAPTAIN",
+            "RESCUE SQUAD": "RESCUE SQUAD",
+            "INVESTIGATION": "INVESTIGATION",
+            "CP": "CP",
+            "BLS": "BLS"
+        }
+    },
+
+    "call_type_group": {
+
+        "type": "map",
+
+        "map": {
+
+            "POTENTIALLY LIFE THREATENING":
+                "Potentially Life-Threatening",
+
+            "NON LIFE THREATENING":
+                "Non Life-threatening",
+
+            "ALARM":
+                "Alarm",
+
+            "FIRE":
+                "Fire"
+        }
+    },
+
+    "battalion": {
+
+        "type": "regex_extract",
+
+        "pattern": r"(\d+)",
+
+        "format": "B{:02d}"
+    }
 }
 
-allowed_unit_type = set(UNIT_TYPE_MAP.values())
+# =========================================================
+# VALIDATION SCHEMA
+# =========================================================
 
-allowed_battalions = {
-    "B01","B02","B03","B04","B05",
-    "B06","B07","B08","B09"
+VALIDATION_SCHEMA = {
+
+    "predict": {
+
+        "call_type": {
+            "type": "string",
+            "required": True
+        },
+
+        "call_type_group": {
+            "type": "categorical",
+            "required": True,
+            "normalize": "call_type_group"
+        },
+
+        "original_priority": {
+            "type": "enum",
+            "required": True,
+            "allowed": [
+                '1','2','3','E',
+                'I','A','B','T'
+            ]
+        },
+
+        "unit_id": {
+            "type": "string",
+            "required": True
+        },
+
+        "unit_type": {
+            "type": "categorical",
+            "required": True,
+            "normalize": "unit_type"
+        },
+
+        "station_area": {
+            "type": "string",
+            "required": True
+        },
+
+        "battalion": {
+            "type": "categorical",
+            "required": True,
+            "normalize": "battalion",
+            "allowed": {
+                "B01","B02","B03","B04",
+                "B05","B06","B07","B08","B09"
+            }
+        },
+
+        "neighborhood_district": {
+            "type": "string",
+            "required": True
+        },
+
+        "zipcode_of_incident": {
+            "type": "enum",
+            "required": True,
+            "allowed": {
+                "94102","94103","94104","94105",
+                "94107","94108","94109","94110",
+                "94111","94112","94114","94115",
+                "94116","94117","94118","94121",
+                "94122","94123","94124","94127",
+                "94129","94130","94131","94132",
+                "94133","94134","94158"
+            }
+        },
+
+        "received_dttm": {
+            "type": "datetime",
+            "required": True
+        }
+    },
+
+    "actual": {
+
+        "unit_id": {
+            "type": "string",
+            "required": True
+        },
+
+        "received_dttm": {
+            "type": "datetime",
+            "required": True
+        },
+
+        "on_scene_dttm": {
+            "type": "datetime",
+            "required": True
+        }
+    }
 }
 
-CALL_TYPE_GROUP_MAP = {
-    "POTENTIALLY LIFE THREATENING": "Potentially Life-Threatening",
-    "NON LIFE THREATENING": "Non Life-threatening",
-    "ALARM": "Alarm",
-    "FIRE": "Fire"
-}
-
-allowed_call_type_group = set(CALL_TYPE_GROUP_MAP.values())
-
-allowed_priority = ['1','2','3','E','I','A','B','T']
-
-SF_zipcodes = {
-    "94102","94103","94104","94105","94107","94108",
-    "94109","94110","94111","94112","94114","94115",
-    "94116","94117","94118","94121","94122","94123",
-    "94124","94127","94129","94130","94131","94132",
-    "94133","94134","94158"
-}
-
 # =========================================================
-# ERROR HANDLER
+# NORMALIZER
 # =========================================================
 
-def validation_error(field, value, allowed=None):
-    allowed_str = ", ".join(sorted(map(str, allowed))) if allowed else ""
-    return False, (
-        f"{field} '{value}' is invalid"
-        + (f". Allowed values: {allowed_str}" if allowed else "")
-    )
+class CategoricalNormalizer:
 
-# =========================================================
-# NORMALIZATION
-# =========================================================
+    def __init__(self, config):
+        self.config = config
 
-def normalize_text(value: str):
-    if value is None:
+    def normalize_text(self, value):
+
+        if value is None:
+            return None
+
+        v = str(value).upper().strip()
+
+        v = re.sub(
+            r"[^A-Z0-9]+",
+            " ",
+            v
+        )
+
+        v = re.sub(
+            r"\s+",
+            " ",
+            v
+        )
+
+        return v.strip()
+
+    def normalize(self, field, value):
+
+        if field not in self.config:
+            return value
+
+        rule = self.config[field]
+
+        # -------------------------------------------------
+        # MAP
+        # -------------------------------------------------
+
+        if rule["type"] == "map":
+
+            v = self.normalize_text(value)
+
+            if not v:
+                return None
+
+            mapping = rule["map"]
+
+            # exact match
+            if v in mapping:
+                return mapping[v]
+
+            # fallback
+            if rule.get(
+                "allow_token_fallback",
+                False
+            ):
+
+                base = re.split(
+                    r"\s+",
+                    v
+                )[0]
+
+                if base in mapping:
+                    return mapping[base]
+
+            return None
+
+        # -------------------------------------------------
+        # REGEX EXTRACT
+        # -------------------------------------------------
+
+        if rule["type"] == "regex_extract":
+
+            match = re.search(
+                rule["pattern"],
+                str(value).upper()
+            )
+
+            if not match:
+                return None
+
+            num = int(match.group(1))
+
+            return rule["format"].format(num)
+
         return None
-    v = str(value).upper().strip()
-    v = re.sub(r"[^A-Z0-9]+", " ", v)
-    v = re.sub(r"\s+", " ", v)
-    return v.strip()
 
 # =========================================================
-# MAX ROBUST UNIT TYPE NORMALIZER
+# VALIDATOR
 # =========================================================
 
-def normalize_unit_type(value: str):
-    v = normalize_text(value)
+class SchemaValidator:
 
-    if not v:
-        return None
+    def __init__(
+        self,
+        schema,
+        normalizer
+    ):
 
-    # Step 1: try full match first
-    if v in UNIT_TYPE_MAP:
-        return UNIT_TYPE_MAP[v]
+        self.schema = schema
+        self.normalizer = normalizer
 
-    # Step 2: extract base token safely
-    # Handles:
-    # "ENGINE 10", "ENGINE-10", "ENGINE10", "ENGINE 10 EAST"
-    base = re.split(r"\s+", v)[0]
+    def validation_error(
+        self,
+        field,
+        value,
+        allowed=None
+    ):
 
-    # Step 3: direct mapping on base
-    if base in UNIT_TYPE_MAP:
-        return UNIT_TYPE_MAP[base]
+        if allowed:
 
-    return None
+            allowed_str = ", ".join(
+                sorted(map(str, allowed))
+            )
+
+            return (
+                f"{field} '{value}' is invalid. "
+                f"Allowed values: {allowed_str}"
+            )
+
+        return (
+            f"{field} '{value}' is invalid"
+        )
+
+    def validate(
+        self,
+        section,
+        data
+    ):
+
+        if not isinstance(data, dict):
+            return False, (
+                "payload must be valid json"
+            )
+
+        rules = self.schema[section]
+
+        # -------------------------------------------------
+        # REQUIRED CHECK
+        # -------------------------------------------------
+
+        for field, rule in rules.items():
+
+            if (
+                rule.get("required")
+                and field not in data
+            ):
+
+                return False, (
+                    f"missing field: {field}"
+                )
+
+        # -------------------------------------------------
+        # FIELD VALIDATION
+        # -------------------------------------------------
+
+        for field, rule in rules.items():
+
+            value = data.get(field)
+
+            if value is None:
+                continue
+
+            field_type = rule["type"]
+
+            # ---------------------------------------------
+            # STRING
+            # ---------------------------------------------
+
+            if field_type == "string":
+
+                if (
+                    not isinstance(value, str)
+                    or not value.strip()
+                ):
+
+                    return False, (
+                        f"{field} must be "
+                        f"a non-empty string"
+                    )
+
+            # ---------------------------------------------
+            # ENUM
+            # ---------------------------------------------
+
+            elif field_type == "enum":
+
+                if (
+                    str(value)
+                    not in rule["allowed"]
+                ):
+
+                    return False, (
+                        self.validation_error(
+                            field,
+                            value,
+                            rule["allowed"]
+                        )
+                    )
+
+            # ---------------------------------------------
+            # DATETIME
+            # ---------------------------------------------
+
+            elif field_type == "datetime":
+
+                try:
+                    pd.to_datetime(value)
+
+                except:
+
+                    return False, (
+                        f"{field} must be "
+                        f"valid ISO 8601 datetime"
+                    )
+
+            # ---------------------------------------------
+            # CATEGORICAL
+            # ---------------------------------------------
+
+            elif field_type == "categorical":
+
+                normalized = (
+                    self.normalizer.normalize(
+                        rule["normalize"],
+                        value
+                    )
+                )
+
+                if normalized is None:
+
+                    allowed = None
+
+                    config = CATEGORICAL_CONFIG[
+                        rule["normalize"]
+                    ]
+
+                    if config["type"] == "map":
+                        allowed = set(
+                            config["map"].values()
+                        )
+
+                    return False, (
+                        self.validation_error(
+                            field,
+                            value,
+                            allowed
+                        )
+                    )
+
+                # allowed check
+                if (
+                    "allowed" in rule
+                    and normalized
+                    not in rule["allowed"]
+                ):
+
+                    return False, (
+                        self.validation_error(
+                            field,
+                            value,
+                            rule["allowed"]
+                        )
+                    )
+
+                # overwrite payload
+                data[field] = normalized
+
+        return True, None
 
 # =========================================================
-# NORMALIZATION HELPERS
+# INIT
 # =========================================================
 
-def normalize_battalion(value: str):
-    if value is None:
-        return None
+normalizer = CategoricalNormalizer(
+    CATEGORICAL_CONFIG
+)
 
-    v = str(value).upper().strip()
-    v = re.sub(r"[^A-Z0-9]", "", v)
-
-    match = re.search(r"(\d+)", v)
-    if not match:
-        return None
-
-    return f"B{int(match.group(1)):02d}"
-
-# =========================================================
-# VALIDATION
-# =========================================================
-
-def validate_predict(data):
-
-    if not isinstance(data, dict):
-        return False, "payload must be valid json"
-
-    for f in [
-        "call_type","call_type_group","original_priority",
-        "unit_id","unit_type","station_area","battalion",
-        "neighborhood_district","zipcode_of_incident",
-        "received_dttm"
-    ]:
-        if f not in data:
-            return False, f"missing field: {f}"
-
-    # call_type (required)
-    if not isinstance(data.get("call_type"), str) or not data["call_type"].strip():
-        return validation_error("call_type", data.get("call_type"))
-
-    # datetime
-    try:
-        pd.to_datetime(data["received_dttm"])
-    except:
-        return False, "received_dttm must be valid ISO datetime"
-
-    # zipcode
-    zipcode = str(data["zipcode_of_incident"])
-    if zipcode not in SF_zipcodes:
-        return validation_error("zipcode_of_incident", zipcode, SF_zipcodes)
-
-    # priority
-    priority = str(data["original_priority"])
-    if priority not in allowed_priority:
-        return validation_error("original_priority", priority, allowed_priority)
-
-    # call_type_group (mapped + normalized)
-    ctg = normalize_text(data["call_type_group"])
-    mapped_ctg = CALL_TYPE_GROUP_MAP.get(ctg)
-
-    if not mapped_ctg:
-        return validation_error("call_type_group", data["call_type_group"], allowed_call_type_group)
-
-    data["call_type_group"] = mapped_ctg
-
-    # unit_type (MAX ROBUST FIX)
-    unit_type = normalize_unit_type(data["unit_type"])
-    if unit_type not in allowed_unit_type:
-        return validation_error("unit_type", data["unit_type"], allowed_unit_type)
-
-    data["unit_type"] = unit_type
-
-    # battalion
-    battalion = normalize_battalion(data["battalion"])
-    if battalion not in allowed_battalions:
-        return validation_error("battalion", data["battalion"], allowed_battalions)
-
-    data["battalion"] = battalion
-
-    return True, None
-
-# =========================================================
-# ACTUAL VALIDATION
-# =========================================================
-
-def validate_actual(data):
-
-    for f in ["unit_id","received_dttm","on_scene_dttm"]:
-        if f not in data:
-            return False, f"missing field: {f}"
-
-    try:
-        r = pd.to_datetime(data["received_dttm"])
-        o = pd.to_datetime(data["on_scene_dttm"])
-    except:
-        return False, "invalid datetime format"
-
-    if o < r:
-        return False, "on_scene_dttm cannot be earlier than received_dttm"
-
-    return True, None
+validator = SchemaValidator(
+    VALIDATION_SCHEMA,
+    normalizer
+)
 
 # =========================================================
 # FEATURE BUILDER
@@ -266,106 +588,329 @@ def make_features(payload):
     row = {}
 
     for col in COLUMNS:
-        if col == "neighborhoods_analysis_boundaries":
-            row[col] = payload.get("neighborhood_district", "missing")
+
+        if (
+            col ==
+            "neighborhoods_analysis_boundaries"
+        ):
+
+            row[col] = payload.get(
+                "neighborhood_district",
+                "missing"
+            )
+
         else:
-            row[col] = payload.get(col, np.nan)
+
+            row[col] = payload.get(
+                col,
+                np.nan
+            )
 
     X = pd.DataFrame([row])
 
     for col in COLUMNS:
+
         dtype = DTYPES[col]
 
-        if np.issubdtype(dtype, np.number):
-            X[col] = pd.to_numeric(X[col], errors="coerce")
-            X[col] = X[col].replace([np.inf, -np.inf], np.nan).fillna(0)
-        else:
+        if np.issubdtype(
+            dtype,
+            np.number
+        ):
+
+            X[col] = pd.to_numeric(
+                X[col],
+                errors="coerce"
+            )
+
             X[col] = (
-                X[col].astype(str)
-                .replace("nan", "missing")
+                X[col]
+                .replace(
+                    [np.inf, -np.inf],
+                    np.nan
+                )
+                .fillna(0)
+            )
+
+        else:
+
+            X[col] = (
+                X[col]
+                .astype(str)
+                .replace(
+                    "nan",
+                    "missing"
+                )
                 .fillna("missing")
             )
 
     return X[COLUMNS]
 
 # =========================================================
-# FLASK APP
+# FLASK
 # =========================================================
 
 app = Flask(__name__)
 
-@app.route("/predict_response/", methods=["POST"])
+# =========================================================
+# PREDICT
+# =========================================================
+
+@app.route(
+    "/predict_response/",
+    methods=["POST"]
+)
 def predict_response():
 
     payload = request.get_json()
-    valid, error = validate_predict(payload)
+
+    raw_payload = (
+        payload.copy()
+        if isinstance(payload, dict)
+        else payload
+    )
+
+    valid, error = validator.validate(
+        "predict",
+        payload
+    )
 
     if not valid:
-        return jsonify({"error": error}), 422
+
+        return jsonify({
+            "error": error
+        }), 422
 
     try:
+
         X = make_features(payload)
-        pred = float(model.predict(X)[0])
+
+        pred = float(
+            model.predict(X)[0]
+        )
 
         Prediction.create(
+
+            # identifiers
             unit_id=payload["unit_id"],
-            received_dttm=payload["received_dttm"],
-            predicted_response_time_seconds=pred,
-            predict_payload=payload
+            received_dttm=payload[
+                "received_dttm"
+            ],
+
+            # predictions
+            predicted_response_time_seconds=(
+                pred
+            ),
+
+            # structured fields
+            call_type=payload["call_type"],
+
+            call_type_group=payload[
+                "call_type_group"
+            ],
+
+            original_priority=payload[
+                "original_priority"
+            ],
+
+            unit_type=payload["unit_type"],
+
+            station_area=payload[
+                "station_area"
+            ],
+
+            battalion=payload[
+                "battalion"
+            ],
+
+            neighborhood_district=payload[
+                "neighborhood_district"
+            ],
+
+            zipcode_of_incident=payload[
+                "zipcode_of_incident"
+            ],
+
+            # payloads
+            raw_predict_payload=(
+                raw_payload
+            ),
+
+            normalized_predict_payload=(
+                payload
+            )
         )
 
         return jsonify({
-            "unit_id": payload["unit_id"],
-            "received_dttm": payload["received_dttm"],
-            "predicted_response_time_seconds": pred
+
+            "unit_id":
+                payload["unit_id"],
+
+            "received_dttm":
+                payload["received_dttm"],
+
+            "predicted_response_time_seconds":
+                pred
         })
 
     except IntegrityError:
-        return jsonify({"error": "prediction already exists for "
-                "this unit_id and received_dttm pair"}), 422
+
+        return jsonify({
+
+            "error":
+                "prediction already exists "
+                "for this unit_id and "
+                "received_dttm pair"
+
+        }), 422
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 422
 
+        return jsonify({
 
-@app.route("/actual_response/", methods=["POST"])
+            "error":
+                "prediction failed",
+
+            "detail":
+                str(e)
+
+        }), 422
+
+# =========================================================
+# ACTUAL
+# =========================================================
+
+@app.route(
+    "/actual_response/",
+    methods=["POST"]
+)
 def actual_response():
 
     payload = request.get_json()
-    valid, error = validate_actual(payload)
+
+    raw_payload = (
+        payload.copy()
+        if isinstance(payload, dict)
+        else payload
+    )
+
+    valid, error = validator.validate(
+        "actual",
+        payload
+    )
 
     if not valid:
-        return jsonify({"error": error}), 422
+
+        return jsonify({
+            "error": error
+        }), 422
 
     record = Prediction.get_or_none(
-        (Prediction.unit_id == payload["unit_id"]) &
-        (Prediction.received_dttm == payload["received_dttm"])
+
+        (Prediction.unit_id ==
+            payload["unit_id"])
+
+        &
+
+        (
+            Prediction.received_dttm ==
+            payload["received_dttm"]
+        )
     )
 
     if record is None:
-        return jsonify({"error": "record not found"}), 422
 
-    actual_seconds = (
-        pd.to_datetime(payload["on_scene_dttm"]) -
-        pd.to_datetime(payload["received_dttm"])
-    ).total_seconds()
+        return jsonify({
 
-    record.actual_response_time_seconds = actual_seconds
-    record.actual_payload = payload
-    record.save()
+            "error":
+                "record not found for "
+                "provided unit_id and "
+                "received_dttm"
 
-    return jsonify({
-        "unit_id": record.unit_id,
-        "received_dttm": record.received_dttm,
-        "actual_response_time_seconds": actual_seconds,
-        "predicted_response_time_seconds": record.predicted_response_time_seconds
-    })
+        }), 422
 
+    try:
+
+        actual_seconds = (
+
+            pd.to_datetime(
+                payload["on_scene_dttm"]
+            )
+
+            -
+
+            pd.to_datetime(
+                payload["received_dttm"]
+            )
+
+        ).total_seconds()
+
+        record.on_scene_dttm = payload[
+            "on_scene_dttm"
+        ]
+
+        record.actual_response_time_seconds = (
+            actual_seconds
+        )
+
+        record.raw_actual_payload = (
+            raw_payload
+        )
+
+        record.normalized_actual_payload = (
+            payload
+        )
+
+        record.save()
+
+        return jsonify({
+
+            "unit_id":
+                record.unit_id,
+
+            "received_dttm":
+                record.received_dttm,
+
+            "on_scene_dttm":
+                payload["on_scene_dttm"],
+
+            "actual_response_time_seconds":
+                actual_seconds,
+
+            "predicted_response_time_seconds":
+                record.predicted_response_time_seconds
+        })
+
+    except Exception as e:
+
+        return jsonify({
+
+            "error":
+                "update failed",
+
+            "detail":
+                str(e)
+
+        }), 422
+
+# =========================================================
+# HEALTH CHECK
+# =========================================================
 
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"status": "ok"})
 
+    return jsonify({
+        "status": "ok"
+    })
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=True
+    )
