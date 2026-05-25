@@ -64,11 +64,14 @@ UNIT_TYPE_MAP = {
     "AMBULANCE": "MEDIC",
     "AMB": "MEDIC",
     "PARAMEDIC": "MEDIC",
+
     "ENGINE": "ENGINE",
     "ENG": "ENGINE",
     "ENGINE COMPANY": "ENGINE",
+
     "TRUCK": "TRUCK",
     "TRUCK COMPANY": "TRUCK",
+
     "CHIEF": "CHIEF",
     "PRIVATE": "PRIVATE",
     "SUPPORT": "SUPPORT",
@@ -86,10 +89,6 @@ allowed_battalions = {
     "B06","B07","B08","B09"
 }
 
-# =========================================================
-# FIX: CALL TYPE GROUP MAP
-# =========================================================
-
 CALL_TYPE_GROUP_MAP = {
     "POTENTIALLY LIFE THREATENING": "Potentially Life-Threatening",
     "NON LIFE THREATENING": "Non Life-threatening",
@@ -97,12 +96,7 @@ CALL_TYPE_GROUP_MAP = {
     "FIRE": "Fire"
 }
 
-allowed_call_type_group = {
-    "Potentially Life-Threatening",
-    "Non Life-threatening",
-    "Alarm",
-    "Fire"
-}
+allowed_call_type_group = set(CALL_TYPE_GROUP_MAP.values())
 
 allowed_priority = ['1','2','3','E','I','A','B','T']
 
@@ -118,18 +112,12 @@ SF_zipcodes = {
 # ERROR HANDLER
 # =========================================================
 
-def validation_error(field, value, allowed=None, message=None):
-    if message:
-        return False, message
-
-    if allowed is not None:
-        allowed_str = ", ".join(sorted(map(str, allowed)))
-        return False, (
-            f"{field} '{value}' is invalid. "
-            f"Allowed values: {allowed_str}"
-        )
-
-    return False, f"{field} '{value}' is invalid"
+def validation_error(field, value, allowed=None):
+    allowed_str = ", ".join(sorted(map(str, allowed))) if allowed else ""
+    return False, (
+        f"{field} '{value}' is invalid"
+        + (f". Allowed values: {allowed_str}" if allowed else "")
+    )
 
 # =========================================================
 # NORMALIZATION
@@ -139,10 +127,38 @@ def normalize_text(value: str):
     if value is None:
         return None
     v = str(value).upper().strip()
-    v = re.sub(r"[^A-Z0-9]", " ", v)
+    v = re.sub(r"[^A-Z0-9]+", " ", v)
     v = re.sub(r"\s+", " ", v)
     return v.strip()
 
+# =========================================================
+# MAX ROBUST UNIT TYPE NORMALIZER
+# =========================================================
+
+def normalize_unit_type(value: str):
+    v = normalize_text(value)
+
+    if not v:
+        return None
+
+    # Step 1: try full match first
+    if v in UNIT_TYPE_MAP:
+        return UNIT_TYPE_MAP[v]
+
+    # Step 2: extract base token safely
+    # Handles:
+    # "ENGINE 10", "ENGINE-10", "ENGINE10", "ENGINE 10 EAST"
+    base = re.split(r"\s+", v)[0]
+
+    # Step 3: direct mapping on base
+    if base in UNIT_TYPE_MAP:
+        return UNIT_TYPE_MAP[base]
+
+    return None
+
+# =========================================================
+# NORMALIZATION HELPERS
+# =========================================================
 
 def normalize_battalion(value: str):
     if value is None:
@@ -156,22 +172,6 @@ def normalize_battalion(value: str):
         return None
 
     return f"B{int(match.group(1)):02d}"
-
-
-def normalize_unit_type(value: str):
-    v = normalize_text(value)
-
-    if v in UNIT_TYPE_MAP:
-        return UNIT_TYPE_MAP[v]
-
-    if v and "AMBUL" in v:
-        return "MEDIC"
-    if v and "ENGINE" in v:
-        return "ENGINE"
-    if v and "TRUCK" in v:
-        return "TRUCK"
-
-    return None
 
 # =========================================================
 # VALIDATION
@@ -191,9 +191,7 @@ def validate_predict(data):
         if f not in data:
             return False, f"missing field: {f}"
 
-    # -------------------------
-    # call_type (required check only)
-    # -------------------------
+    # call_type (required)
     if not isinstance(data.get("call_type"), str) or not data["call_type"].strip():
         return validation_error("call_type", data.get("call_type"))
 
@@ -213,24 +211,16 @@ def validate_predict(data):
     if priority not in allowed_priority:
         return validation_error("original_priority", priority, allowed_priority)
 
-    # =====================================================
-    # FIXED call_type_group (normalization + mapping)
-    # =====================================================
+    # call_type_group (mapped + normalized)
+    ctg = normalize_text(data["call_type_group"])
+    mapped_ctg = CALL_TYPE_GROUP_MAP.get(ctg)
 
-    raw_ctg = data["call_type_group"]
-    normalized_ctg = normalize_text(raw_ctg)
-
-    if not normalized_ctg:
-        return validation_error("call_type_group", raw_ctg, allowed_call_type_group)
-
-    mapped_ctg = CALL_TYPE_GROUP_MAP.get(normalized_ctg)
-
-    if mapped_ctg is None:
-        return validation_error("call_type_group", raw_ctg, allowed_call_type_group)
+    if not mapped_ctg:
+        return validation_error("call_type_group", data["call_type_group"], allowed_call_type_group)
 
     data["call_type_group"] = mapped_ctg
 
-    # unit_type
+    # unit_type (MAX ROBUST FIX)
     unit_type = normalize_unit_type(data["unit_type"])
     if unit_type not in allowed_unit_type:
         return validation_error("unit_type", data["unit_type"], allowed_unit_type)
@@ -246,6 +236,9 @@ def validate_predict(data):
 
     return True, None
 
+# =========================================================
+# ACTUAL VALIDATION
+# =========================================================
 
 def validate_actual(data):
 
@@ -285,11 +278,11 @@ def make_features(payload):
 
         if np.issubdtype(dtype, np.number):
             X[col] = pd.to_numeric(X[col], errors="coerce")
-            X[col] = X[col].replace([np.inf,-np.inf], np.nan).fillna(0)
+            X[col] = X[col].replace([np.inf, -np.inf], np.nan).fillna(0)
         else:
             X[col] = (
                 X[col].astype(str)
-                .replace("nan","missing")
+                .replace("nan", "missing")
                 .fillna("missing")
             )
 
@@ -328,9 +321,8 @@ def predict_response():
         })
 
     except IntegrityError:
-        return jsonify({
-            "error": "prediction already exists for this unit_id and received_dttm pair"
-        }), 422
+        return jsonify({"error": "prediction already exists for "
+                "this unit_id and received_dttm pair"}), 422
 
     except Exception as e:
         return jsonify({"error": str(e)}), 422
