@@ -68,7 +68,7 @@ model = joblib.load("model.pickle")
 allowed_unit_type = {'MEDIC', 'ENGINE', 'PRIVATE', 'CHIEF', 'TRUCK', 'RESCUE CAPTAIN', 'SUPPORT', 
 'RESCUE SQUAD', 'INVESTIGATION', 'CP', 'BLS'}
 
-allowed_battalions = { "B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B09"}
+allowed_battalions = { "B01", "B02", "B03", "B04", "B05", "B06", "B07", "B08", "B09", "B10"}
 
 allowed_call_type_group = ["potentially life-threatening", "non life-threatening", "alarm", "fire" ]
 

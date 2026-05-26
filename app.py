@@ -137,7 +137,7 @@ VALIDATION_SCHEMA = {
         "unit_type": {"type": "categorical", "required": True, "normalize": "unit_type"},
         "station_area": {"type": "string", "required": True},
         "battalion": {"type": "categorical", "required": True, "normalize": "battalion",
-                      "allowed": {"B01","B02","B03","B04","B05","B06","B07","B08","B09"}},
+                      "allowed": {"B01","B02","B03","B04","B05","B06","B07","B08","B09","B10"}},
         "neighborhood_district": {"type": "string", "required": True},
         "zipcode_of_incident": {"type": "enum", "required": True,
                                 "allowed": {"94102","94103","94104","94105","94107","94108","94109","94110",
