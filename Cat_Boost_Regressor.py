@@ -22,10 +22,8 @@ from features import build_dataset
 # =========================================================
 
 df = build_dataset("data/data.csv")
-df = df.dropna(subset=["call_type_group"])
 
-df = df.sort_values("received_dttm")
-
+df = df.sort_values("received_dttm").reset_index(drop=True)
 
 # =========================================================
 # SAME FEATURE SET AS LINEAR REGRESSION
@@ -55,12 +53,11 @@ TARGET = "response_time"
 X = df.reindex(columns=FEATURES).copy()
 y = df[TARGET]
 
-
 # =========================================================
 # TYPE SAFETY
 # =========================================================
 
-cat_features = X.select_dtypes(include=["object"]).columns.tolist()
+cat_features = X_train.select_dtypes(include=["object", "category"]).columns.tolist()
 num_features = X.select_dtypes(include=[np.number]).columns.tolist()
 
 for c in cat_features:
@@ -89,9 +86,9 @@ model = CatBoostRegressor(
 
     iterations=1200,
     depth=8,
-    learning_rate=0.03,
+    learning_rate=0.05,
 
-    loss_function="MAE",
+    loss_function="RMSE",
     eval_metric="MAE",
 
     l2_leaf_reg=5,

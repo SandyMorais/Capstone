@@ -29,10 +29,6 @@ NUMERIC_COLUMNS = [
     "dow_sin",
     "dow_cos",
     "is_weekend",
-    "load_1h",
-    "load_1d",
-    "station_queue_pressure",
-    "station_ewm_load",
     "station_speed_index"
 ]
 
@@ -47,7 +43,7 @@ def enforce_schema(df, cat_cols=CATEGORICAL_COLUMNS, num_cols=NUMERIC_COLUMNS):
     # categorical safety (CatBoost requirement)
     for col in cat_cols:
         if col in df.columns:
-            df[col] = df[col].astype(str).fillna("missing")
+            df[col] = df[col].fillna("missing").astype(str)
 
     # numeric safety
     for col in num_cols:
@@ -58,7 +54,7 @@ def enforce_schema(df, cat_cols=CATEGORICAL_COLUMNS, num_cols=NUMERIC_COLUMNS):
 
 
 # =========================================================
-# CLEAN (FIXED: FIRST UNIT ON SCENE)
+# CLEAN
 # =========================================================
 
 def clean(df):
@@ -67,12 +63,24 @@ def clean(df):
     # datetime parsing
     df["received_dttm"] = pd.to_datetime(df["received_dttm"], errors="coerce")
     df["on_scene_dttm"] = pd.to_datetime(df["on_scene_dttm"], errors="coerce")
-
-    required = ["incident_number", "received_dttm", "on_scene_dttm"]
-    df = df.dropna(subset=required)
+    df["dispatch_dttm"] = pd.to_datetime(df["dispatch_dttm"], errors="coerce")
 
     # -----------------------------------------------------
-    # FIRST UNIT ON SCENE (CORRECT LOGIC)
+    # valid_ battalions
+    # -----------------------------------------------------
+
+    valid_battalions = [f'B{i:02d}' for i in range(1, 11)]
+
+    df['battalion'] = df['battalion'].where(
+    df['battalion'].isin(valid_battalions), 'unknown')
+
+    # -----------------------------------------------------
+    # Drop missing values
+    # -----------------------------------------------------
+    df = df.dropna(subset=["incident_number", "received_dttm", "on_scene_dttm"])
+
+    # -----------------------------------------------------
+    # FIRST UNIT ON SCENE 
     # -----------------------------------------------------
     df = df.sort_values(
         ["incident_number", "on_scene_dttm", "received_dttm", "unit_id"]
@@ -123,84 +131,15 @@ def add_time_features(df):
 
 
 # =========================================================
-# STREAMING FEATURES (SAFE)
-# =========================================================
-
-def add_streaming_features(df):
-    df = df.copy()
-    df = df.sort_values("received_dttm")
-
-    df["station_queue_pressure"] = df.groupby("station_area").cumcount()
-
-    df["hour_bucket"] = df["received_dttm"].dt.floor("h")
-
-    df["station_hour_load"] = (
-    df.groupby(["station_area", "hour_bucket"])
-    .transform("size")
-    .astype(float))
-
-    df["station_avg_response"] = (
-        df.groupby("station_area")[TARGET_COL]
-        .transform(lambda x: x.shift(1).rolling(50, min_periods=5).mean())
-    )
-
-    df["station_avg_response"] = df["station_avg_response"].fillna(
-        df[TARGET_COL].median()
-    )
-
-    return df
-
-
-# =========================================================
 # CONGESTION FEATURES (FIXED)
 # =========================================================
 
-def add_congestion_features(df):
+def add_features(df):
     df = df.copy()
     df = df.sort_values("received_dttm")
 
     # =====================================================
-    # 1. TIME BUCKET COUNTS (SAFE, NO LEAKAGE)
-    # =====================================================
-
-    df["hour_bucket"] = df["received_dttm"].dt.floor("h")
-    df["day_bucket"] = df["received_dttm"].dt.date
-
-    df["load_1h"] = df.groupby(
-        ["station_area", "hour_bucket"]
-    )["station_area"].transform("size")
-
-    df["load_1d"] = df.groupby(
-        ["station_area", "day_bucket"]
-    )["station_area"].transform("size")
-
-    # =====================================================
-    # 2. CUMULATIVE PRESSURE (VERY STABLE)
-    # =====================================================
-
-    df["station_queue_pressure"] = (
-        df.groupby("station_area").cumcount()
-    )
-
-    # normalize (important for stability)
-    df["station_queue_pressure"] = (
-        df["station_queue_pressure"]
-        / (df.groupby("station_area")["station_queue_pressure"]
-           .transform("max")
-           .replace(0, 1))
-    )
-
-    # =====================================================
-    # 3. EXPONENTIAL SMOOTHING (SAFE ALTERNATIVE TO ROLLING)
-    # =====================================================
-
-    df["station_ewm_load"] = (
-        df.groupby("station_area")["station_queue_pressure"]
-        .transform(lambda x: x.ewm(span=50, adjust=False).mean())
-    )
-
-    # =====================================================
-    # 4. GLOBAL STATION SPEED BIAS (VERY IMPORTANT)
+    # GLOBAL STATION SPEED BIAS 
     # =====================================================
 
     station_mean = df.groupby("station_area")["response_time"].transform("mean")
@@ -211,6 +150,13 @@ def add_congestion_features(df):
 
     # fill safety
     df["station_speed_index"] = df["station_speed_index"].fillna(1.0)
+
+
+    df["dispatch_delay"] = (
+    df["dispatch_dttm"] - df["received_dttm"]).dt.total_seconds()
+
+    df["travel_time_actual"] = (
+    df["on_scene_dttm"] - df["dispatch_dttm"]).dt.total_seconds()
 
     return df
 
@@ -224,9 +170,9 @@ def build_dataset(path):
 
     df = clean(df)
     df = add_time_features(df)
-    df = add_streaming_features(df)
-    df = add_congestion_features(df)
+    df = add_features(df)
 
     df = enforce_schema(df)
 
     return df
+
