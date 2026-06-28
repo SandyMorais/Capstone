@@ -17,13 +17,13 @@ CATEGORICAL_COLUMNS = [
     "station_area",
     "battalion",
     "zipcode_of_incident",
-    "neighborhoods_analysis_boundaries"
+    "neighborhood_district",
 ]
 
 NUMERIC_COLUMNS = [
     "hour",
     "month",
-    "dow",
+    "day_of_week",
     "hour_sin",
     "hour_cos",
     "dow_sin",
@@ -63,12 +63,12 @@ def clean(df):
     # datetime parsing
     df["received_dttm"] = pd.to_datetime(df["received_dttm"], errors="coerce")
     df["on_scene_dttm"] = pd.to_datetime(df["on_scene_dttm"], errors="coerce")
-    df["dispatch_dttm"] = pd.to_datetime(df["dispatch_dttm"], errors="coerce")
+
+    df = df.rename(columns={"neighborhoods_analysis_boundaries": "neighborhood_district"})
 
     # -----------------------------------------------------
     # valid_ battalions
     # -----------------------------------------------------
-
     valid_battalions = [f'B{i:02d}' for i in range(1, 11)]
 
     df['battalion'] = df['battalion'].where(
@@ -99,7 +99,6 @@ def clean(df):
 
     # clean target
     df = df[df[TARGET_COL] > 0]
-    df = df[df[TARGET_COL] <= df[TARGET_COL].quantile(0.99)]
 
     df = df.sort_values("received_dttm").reset_index(drop=True)
 
@@ -117,15 +116,17 @@ def add_time_features(df):
 
     df["hour"] = dt.dt.hour
     df["month"] = dt.dt.month
-    df["dow"] = dt.dt.dayofweek
+    df["day_of_week"] = dt.dt.weekday
+
+    df["day_of_week_name"] = dt.dt.strftime('%A')
 
     df["hour_sin"] = np.sin(2 * np.pi * df["hour"] / 24)
     df["hour_cos"] = np.cos(2 * np.pi * df["hour"] / 24)
 
-    df["dow_sin"] = np.sin(2 * np.pi * df["dow"] / 7)
-    df["dow_cos"] = np.cos(2 * np.pi * df["dow"] / 7)
+    df["dow_sin"] = np.sin(2 * np.pi * df["day_of_week"] / 7)
+    df["dow_cos"] = np.cos(2 * np.pi * df["day_of_week"] / 7)
 
-    df["is_weekend"] = df["dow"].isin([5, 6]).astype(int)
+    df["is_weekend"] = df["day_of_week"].isin([5, 6]).astype(int)
 
     return df
 
@@ -150,13 +151,6 @@ def add_features(df):
 
     # fill safety
     df["station_speed_index"] = df["station_speed_index"].fillna(1.0)
-
-
-    df["dispatch_delay"] = (
-    df["dispatch_dttm"] - df["received_dttm"]).dt.total_seconds()
-
-    df["travel_time_actual"] = (
-    df["on_scene_dttm"] - df["dispatch_dttm"]).dt.total_seconds()
 
     return df
 

@@ -38,7 +38,7 @@ FEATURES = [
     "zipcode_of_incident",
     "battalion",
     "station_area",
-    "neighborhoods_analysis_boundaries",
+    "neighborhood_district",
     "hour",
     "hour_cos"
 ]
